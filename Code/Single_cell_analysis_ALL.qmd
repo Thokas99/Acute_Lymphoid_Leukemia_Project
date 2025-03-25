@@ -1,0 +1,520 @@
+---
+title: "Single_cell_analysis_of_unknown_cells"
+author: "Thomas Sirchi"
+format: html
+editor: source
+---
+
+#### Load the necessary packages to perform the analysis
+
+```{r}
+#| warning: false
+#| label: load-packages
+#| include: false
+library(Matrix)
+library(tidyverse) # collection of packages for tidy data analysis 
+library(Seurat) # single cell analysis
+library(patchwork) # combine separate ggplots into the same graphic
+library(HGNChelper) #contains functions for identifying and correcting HGNC human gene symbols and MGI mouse gene symbols # load libraries
+
+```
+
+## Analysis of Unknown cells
+
+### Reading in the data.
+
+```{r}
+
+
+# Load the matrix (MTX) file
+mtx <- readMM("GSE130116_RAW/GSM3732337_ETV001_NYU_RELAPSE.matrix.mtx/matrix.mtx")
+
+# Load the gene features (rows of the matrix)
+features <- read.table("GSE130116_RAW/features.tsv", header = FALSE, stringsAsFactors = FALSE)
+
+# Load the cell barcodes (columns of the matrix)
+barcodes <- read.table("GSE130116_RAW/barcodes.tsv", header = FALSE, stringsAsFactors = FALSE)
+
+# Set the row names of the matrix to gene names (features)
+rownames(mtx) <- features$V1  # Gene names are in the first column of features.tsv
+
+# Set the column names of the matrix to cell barcodes
+colnames(mtx) <- barcodes$V1  # Cell barcodes are in the first column of barcodes.tsv
+
+XUR1 <- CreateSeuratObject(counts = mtx, 
+                           project = "XUR1", # name of the project
+                           min.cells = 3,   # filter for genes (rows)
+                           min.features = 50 # filter for cells (columns)
+                           )
+XUR1
+
+# Load the matrix (MTX) file
+mtx <- readMM("GSE130116_RAW/GSM3732339_ETV002_COG_RELAPSE.matrix.mtx/matrix.mtx")
+
+# Load the gene features (rows of the matrix)
+features <- read.table("GSE130116_RAW/features.tsv", header = FALSE, stringsAsFactors = FALSE)
+
+# Load the cell barcodes (columns of the matrix)
+barcodes <- read.table("GSE130116_RAW/barcodes.tsv", header = FALSE, stringsAsFactors = FALSE)
+
+# Set the row names of the matrix to gene names (features)
+rownames(mtx) <- features$V1  # Gene names are in the first column of features.tsv
+
+# Set the column names of the matrix to cell barcodes
+colnames(mtx) <- barcodes$V1  # Cell barcodes are in the first column of barcodes.tsv
+
+XUR2 <- CreateSeuratObject(counts = mtx, 
+                           project = "XUR2", # name of the project
+                           min.cells = 3,   # filter for genes (rows)
+                           min.features = 50 # filter for cells (columns)
+                           )
+XUR2
+
+XUR.combined <- merge(XUR1, y = XUR2, add.cell.ids = c("1", "2"), project = "XUR1_2")
+
+
+```
+
+
+```{r}
+#| label: Reading
+#| warning: false
+XUR1 <- Read10X_h5("GSE196214_RAW/GSM5862822_COG17_Rel.filtered_feature_bc_matrix.h5")
+XUR2 <- Read10X_h5("GSE196214_RAW/GSM5862818_COG14_Rel.filtered_feature_bc_matrix.h5")
+#XUR3 <- Read10X_h5("GSE196214_RAW/GSM5862818_COG14_Rel.filtered_feature_bc_matrix.h5")
+
+```
+
+### Initialize the Seurat object with the digital count matrix
+
+Use the count matrix to create a Seurat object. The object serves as a container that contains both data (like the count matrix) and analysis (like PCA, or clustering results) for a single-cell dataset. Seurat v5 assays store data in layers. These layers can store raw, un-normalized counts (layer='counts'), normalized data (layer='data'), or z-scored/variance-stabilized data (layer='scale.data').
+
+```{r}
+#| label: create_seurat
+#| warning: false
+
+XUR1 <- CreateSeuratObject(counts = mtx, 
+                           project = "XUR1", # name of the project
+                           min.cells = 3,   # filter for genes (rows)
+                           min.features = 50 # filter for cells (columns)
+                           )
+XUR1
+
+XUR2 <- CreateSeuratObject(counts = XUR2, 
+                           project = "XUR2", # name of the project
+                           min.cells = 3,   # filter for genes (rows)
+                           min.features = 50 # filter for cells (columns)
+                           )
+XUR2
+
+XUR.combined <- merge(XUR1, y = XUR2, add.cell.ids = c("1", "2"), project = "XUR1_2")
+
+
+```
+
+Access the count matrix and check the data
+
+```{r}
+#| label: Reading2
+#| warning: false
+#XUR[["RNA"]]$counts[500:505, 1:30]
+LayerData(XUR.combined, assay = "RNA", layer = "counts")[500:505, 1:30]
+table(XUR.combined$orig.ident)
+```
+
+## Standard workflow
+
+### QC and selecting cells for further analysis
+
+```{r }
+#| label: qc_metrics
+#| warning: false
+ 
+XUR.combined[["percent_mt"]] <- PercentageFeatureSet(XUR.combined, pattern = "^MT-")
+XUR.combined[["percent_ERCC"]] <- PercentageFeatureSet(XUR.combined, pattern = "^ERCC-")
+# Show QC metrics for the first 5 cells
+XUR.combined@meta.data
+```
+
+#### Visualize QC metrics as a violin plot
+
+```{r }
+#| label: qc_violin
+#| warning: false
+#| tidy: true
+#| 
+ 
+p1<- VlnPlot(XUR.combined, features = c("nFeature_RNA", "nCount_RNA", "percent_mt"), ncol = 3, pt.size = 0.01)
+p1
+rm(p1)
+```
+
+#### FeatureScatter is typically used to visualize feature-feature relationships, but can be used for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+```{r }
+#| label: qc_scatter
+#| warning: false
+ 
+plot1 <- FeatureScatter(XUR.combined, feature1 = "nCount_RNA", feature2 = "percent_mt")
+plot2 <- FeatureScatter(XUR.combined, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+rm(plot1,plot2)
+```
+
+#### Filter cells based on QC values (nFeature and percent_ERCC)
+
+```{r }
+#| label: qc_filter
+#| warning: false
+
+XUR.combined <- subset(XUR.combined, subset = nFeature_RNA > 1500 & 
+                  nFeature_RNA < 6000 & 
+                  percent_mt < 25)
+XUR.combined
+```
+
+### Normalize data
+
+After removing unwanted cells from the dataset, the next step is to normalize the data.
+
+By default, Seurat employs a global-scaling normalization method "LogNormalize" that normalizes the feature expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default)(to reduce technical variation from sequencing depth), and log-transforms the result (to reduce skewness). Normalized values are stored in the data layer (XUR\[\["RNA"\]\]\$data).
+
+Questionable assumption: each cell should have the same number of reads.
+
+Alternative normalization methods are also available (e.g. sctransform) ps. I prefer direct code like this
+
+```{r}
+#| label: normalization
+#| warning: false
+XUR.combined <- NormalizeData(XUR.combined, 
+                      normalization.method = "LogNormalize",
+                     verbose = T,
+                     scale.factor = 10000)
+
+XUR.combined[["RNA"]]$data[1:10,1:30]
+```
+
+### Identification of highly variable features (feature selection)
+
+We next select a subset of features (genes) that exhibit high cell-to-cell variation in the dataset (i.e, they are highly expressed in some cells, and lowly expressed in others). Focusing on these genes in downstream analysis helps to highlight biological signal in single-cell datasets.
+
+The procedure to select variable features is implemented in the FindVariableFeatures function (the procedure models the mean-variance relationship inherent in single-cell data). By default, the function returns the 2,000 most variable features per dataset. These will be used in downstream analysis, like PCA.
+
+```{r}
+#| label: variable_features
+#| warning: false
+
+XUR.combined <- FindVariableFeatures(XUR.combined, 
+                             selection.method = "vst", #mean.var.plot
+                             nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(XUR.combined), 10)
+top10
+# plot variable features with labels
+plot1 <- VariableFeaturePlot(XUR.combined)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE, xnudge = 0, ynudge = 0)
+plot2
+rm(plot1,plot2,top10)
+```
+
+### Scaling the data
+
+By scaling, Seurat applies a linear transformation to the expression levels of each gene, that is a standard pre-processing step prior to dimensional reduction techniques like PCA.
+
+The ScaleData function:
+
+-   Shifts the expression of each gene, so that the mean expression across cells is 0
+-   Scales the expression of each gene, so that the variance across cells is 1 (z-score transformation)
+
+This step gives equal weight in downstream analyses, so that highly-expressed genes do not dominate
+
+The results of this are stored in XUR\[\["RNA"\]\]\$scale.data
+
+```{r}
+#| label: scaling
+#| warning: false
+
+all_genes <- rownames(XUR.combined)
+
+XUR.combined <- ScaleData(XUR.combined, 
+                  features = all_genes)
+
+XUR.combined[["RNA"]]$scale.data[1:5,1:10]
+```
+
+# Integration
+```{r}
+XUR.combined <- RunPCA(XUR.combined)
+XUR.combined <- IntegrateLayers(object = XUR.combined, method = HarmonyIntegration, orig.reduction = "pca", new.reduction = "integrated.HI",
+    verbose = FALSE)
+
+# re-join layers after integration
+XUR.combined[["RNA"]] <- JoinLayers(XUR.combined[["RNA"]])
+```
+
+### Linear dimensional reduction (PCA)
+
+```{r }
+#| label: PCA
+#| warning: false
+XUR.combined <- RunPCA(XUR.combined, 
+               features = VariableFeatures(object = XUR.combined),
+               verbose = T)
+
+```
+
+Seurat provides several ways of visualizing both cells and features that define the PCA, including VizDimReduction, DimPlot, and DimHeatmap. PCA results are stored in XUR\[\["pca"\]\]
+
+```{r }
+#| label: VizDimLoadings_PCA
+#| warning: false
+VizDimLoadings(XUR.combined, dims = 1:2, reduction = "pca")
+```
+
+DimHeatmap allows for easy exploration of the primary sources of heterogeneity in a dataset, and can be useful when trying to decide which PCs to include for further downstream analyses. Both cells and features are ordered according to their PCA scores. Setting "cells" to a number plots the 'extreme' cells on both ends of the spectrum, which dramatically speeds plotting for large datasets.
+
+```{r pca_heatmap, warniheatmapng=F, message=F}
+#| label: DimHeatmap
+#| warning: false
+DimHeatmap(XUR.combined, dims = 1:2, 
+           cells = 500, 
+           balanced = TRUE)
+
+```
+
+### Determine the 'dimensionality' of the dataset
+
+A heuristic method to decide the number of PC to consider generates an 'Elbow plot': a ranking of principle components based on the percentage of variance explained by each one (ElbowPlot function). In this example, we can observe an 'elbow' around PC9-10, suggesting that the majority of true signal is captured in the first 10 PCs.
+
+```{r }
+#| label: ElbowPlot
+#| warning: false
+ElbowPlot(XUR.combined,ndims = 50)
+```
+
+### Cluster the cells
+
+```{r }
+#| label: clustering
+#| warning: false
+XUR.combined <- FindNeighbors(XUR.combined, reduction = "pca", dims = 1:50)
+XUR.combined <- FindClusters(XUR.combined, resolution = 0.5)
+
+head(Idents(XUR.combined), 5)
+```
+
+### Visualization with UMAP (Uniform Manifold Approximation and Projection)
+
+```{r }
+#| label: umap
+#| warning: false
+XUR.combined <- RunUMAP(XUR.combined, dims = 1:50)
+DimPlot(XUR.combined, reduction = "umap",label=T )
+```
+
+### Finding differentially expressed features (cluster biomarkers)
+
+Seurat can find markers that define clusters via differential expression. By default, setting only ident.1, it identifes positive and negative markers of a single cluster (specified in ident.1), compared to all other cells. FindAllMarkers automates this process for all clusters, but you can also test groups of clusters vs. each other, or against all cells.
+
+The min.pct argument requires a feature to be detected at a minimum percentage in either of the two groups of cells, and the logfc.threshold argument requires a feature to be differentially expressed (on average) by some amount between the two groups.
+
+The default test used is the Wilcoxon Rank Sum test
+
+#### Find all markers distinguishing cluster 0 from clusters 1, 2 and 3
+
+```{r}
+#| label: markers_3
+#| warning: false
+c0_1_3_markers <- FindMarkers(XUR, 
+                          ident.1 = 4, 
+                          ident.2 = 5, 
+                          min.pct = 0.25)
+head(c0_1_3_markers, n = 15)
+```
+
+#### Find markers for every cluster compared to all remaining cells, report only the positive ones
+
+```{r }
+#| label: all_markers
+#| warning: false
+XUR_markers <- FindAllMarkers(XUR.combined, 
+                               only.pos = F, 
+                               min.pct = 0.25, 
+                               logfc.threshold = 0.25)
+
+XUR_markers %>%
+  group_by(cluster)
+```
+```{r}
+
+library(cellmarkeraccordion)
+library(Seurat)
+library(data.table)
+
+# Input: Seurat object
+# Output: Seurat object with annotation results 
+data <- accordion(XUR.combined,tissue="blood", annotation_resolution = "cluster", max_n_marker = 30, include_detailed_annotation_info = TRUE, plot = TRUE)
+
+```
+
+# Marker-based automatic annotation
+
+```{r}
+library(SingleR)
+library(celldex)
+library(SingleCellExperiment)
+
+clusters_XUR <- Idents(XUR.combined)
+
+# Convert Seurat object to SingleCellExperiment
+seurat_sce <- as.SingleCellExperiment(XUR.combined)
+hpca.se <- HumanPrimaryCellAtlasData()
+# Run SingleR
+pred.hesc <- SingleR(test = seurat_sce, ref = hpca.se, assay.type.test = 1, labels = hpca.se$label.main)
+plotScoreHeatmap(pred.hesc)
+# Convert SingleR results to a data frame
+singleR_labels <- as.data.frame(pred.hesc$labels)
+rownames(singleR_labels) <- colnames(XUR.combined)
+
+# Add SingleR predictions as metadata to the Seurat object
+XUR.combined$SingleR_labels <- singleR_labels$`pred.hesc$labels`
+
+# Visualize on UMAP
+UMAPPlot(XUR.combined, group.by = "SingleR_labels") +
+  labs(title = "UMAP with SingleR Predicted Cell Types")
+
+# Extract cluster information
+cluster_info <- Idents(XUR.combined)
+
+# Combine cluster information and SingleR labels into a data frame
+combined_df <- tibble(
+  Cell = names(cluster_info),
+  Cluster = as.character(cluster_info),
+  CellType = XUR.combined$SingleR_labels
+)
+
+# Group by Cluster and summarize the number of cells per CellType
+cluster_summary <- combined_df %>%
+  group_by(Cluster, CellType) %>%
+  summarize(CellCount = n(), .groups = "drop")
+
+# Print the first few rows of the summarized data
+head(cluster_summary)
+
+
+```
+
+```{r}
+# Set cell type labels as the active identity
+Idents(XUR.combined) <- "SingleR_labels"
+
+# Specify the cell types you want to keep
+unique(Idents(XUR.combined))
+cell_types_to_keep <- c("T_cells", "B_cell", "Pro-B_cell_CD34+","B_cell","Pre-B_cell_CD34-")
+
+# Subset the Seurat object
+XUR.combined <- subset(XUR.combined, idents = cell_types_to_keep)
+```
+
+## Degs for Cell type
+```{r}
+# Differential expression between "T cells" and "B cells"
+de_results_T_cells <- FindMarkers(XUR.combined, ident.1 = "T_cells", ident.2 = "Pro-B_cell_CD34+")
+de_results_T_cells <- de_results_T_cells |> rownames_to_column("gene")
+
+de_results_ProB <- FindMarkers(XUR.combined, ident.1 = "Pro-B_cell_CD34+", ident.2 = "T_cells")
+de_results_ProB <- de_results_ProB |> rownames_to_column("gene")
+
+de_results_B <- FindMarkers(XUR.combined, ident.1 = "B_cell", ident.2 = "T_cells")
+de_results_B <- de_results_B |> rownames_to_column("gene")
+
+de_results_BvsProB <- FindMarkers(XUR.combined, ident.1 = "B_cell", ident.2 = "Pro-B_cell_CD34+")
+de_results_BvsProB <- de_results_BvsProB |> rownames_to_column("gene")
+
+de_results_BvsT <- FindMarkers(XUR.combined, ident.1 = "B_cell", ident.2 = "T_cells")
+de_results_BvsT <- de_results_BvsT |> rownames_to_column("gene")
+
+
+XUR_markers <- FindAllMarkers(XUR.combined, 
+                               only.pos = F, 
+                               min.pct = 0.10, 
+                               logfc.threshold = 0.1)
+
+```
+### Visualization tools
+Seurat offers several tools for visualizing marker expression.
+
+#### VlnPlot shows expression probability distributions across clusters
+
+```{r }
+#| label: vlnplot
+#| warning: false
+VlnPlot(XUR.combined, features = c("MYO7B"),pt.size=0) #XUR_subset
+VlnPlot(XUR.combined, features = c("EBF1"),pt.size=0) #XUR_subset
+VlnPlot(XUR.combined, features = c("MSI2"),pt.size=0) #XUR_subset
+
+#VlnPlot(XUR_subset, features = unique(de_results_ProB$gene),pt.size=0)
+
+# Extract unique features
+#unique_features <- unique(de_results_ProB$gene)
+
+```
+
+#RidgePlot also shows expression probability distributions
+
+```{r }
+#| label: ridgeplot
+#| warning: false
+RidgePlot(XUR.combined, features = unique(total_data_merged$gene))
+```
+
+# FeaturePlot visualizes feature expression on a tSNE, UMAP or PCA plot
+
+```{r }
+#| label: featureplot
+#| warning: false
+FeaturePlot(XUR.combined, features = c("MYO7B"), order =T )
+```
+
+# DotPlot
+
+Intuitive way of visualizing how feature expression changes across different identity classes (clusters). The size of the dot encodes the percentage of cells within a class, while the color encodes the AverageExpression level of cells within a class (blue is high).
+
+```{r dotplot, warning=F, message=F}
+#| label: dotplot
+#| warning: false
+#| tidy: true
+DotPlot(XUR.combined, features = unique(total_data_merged$gene))
+
+DotPlot(XUR.combined, features = unique(data_merged_PreB$gene))
+
+DotPlot(XUR.combined, features = unique(data_merged_T$gene)) #
+
+DotPlot(XUR.combined, features = unique(Top25_with_info_2_$gene), dot.scale = 10)
+
+```
+
+#### DoHeatmap generates an expression heatmap for given cells and features. In this case, we are plotting the top 3 markers (or all markers if less than 3) for each cluster.
+
+```{r }
+#| label: geatmap
+#| warning: false
+#| tidy: true
+#top3 <- XUR_markers %>% group_by(cluster) %>% top_n(n = 3, wt = avg_log2FC)
+DoHeatmap(XUR.combined, features = unique(Top25_with_info_2_$gene),lines.width = 5)
+```
+
+# Interactive plotting features
+
+Seurat utilizes R’s plotly graphing library to create interactive plots.
+
+```{r}
+#| label: Interactive plotting features
+#| warning: false
+#| tidy: true
+plot <- FeaturePlot(XUR, features = c("MYO7B"))
+HoverLocator(plot = plot, information = FetchData(XUR, vars = c("MYO7B")))
+rm(plot)
+```
+
